@@ -9,7 +9,7 @@ import { readDb, writeDb } from "./db.js";
 import { authenticate, authorizeRole, signBootstrapToken, signToken, verifyBootstrapToken } from "./auth.js";
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || "development";
 const ADMIN_GATE_PASSWORDS = new Set([
   "ilovemyparents",
