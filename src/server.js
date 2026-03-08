@@ -10,7 +10,6 @@ import { authenticate, authorizeRole, signBootstrapToken, signToken, verifyBoots
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const NODE_ENV = process.env.NODE_ENV || "development";
 const ADMIN_GATE_PASSWORDS = new Set([
   "ilovemyparents",
   "iloveamptemarak",
