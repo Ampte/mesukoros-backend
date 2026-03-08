@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -25,6 +26,10 @@ const clientOrigins = (process.env.CLIENT_URL || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const PASSWORD_RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES || 30);
+const FRONTEND_URL = process.env.FRONTEND_URL || clientOrigins[0] || "http://localhost:5173";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "";
 
 app.use(cors({
   origin(origin, callback) {
@@ -39,6 +44,46 @@ app.use(express.json());
 app.get("/api/health", (_, res) => {
   res.json({ ok: true });
 });
+
+function hashResetToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function createResetToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+async function sendPasswordResetEmail({ email, name, resetLink }) {
+  if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) {
+    console.log(`[password-reset] Email provider not configured. Reset link for ${email}: ${resetLink}`);
+    return;
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: RESEND_FROM_EMAIL,
+      to: [email],
+      subject: "Reset your MesuKoros password",
+      html: `
+        <p>Hello ${name || "there"},</p>
+        <p>We received a request to reset your MesuKoros password.</p>
+        <p><a href="${resetLink}">Click here to reset your password</a></p>
+        <p>This link will expire in ${PASSWORD_RESET_TTL_MINUTES} minutes.</p>
+        <p>If you did not request this, you can ignore this email.</p>
+      `
+    })
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Failed to send password reset email: ${details}`);
+  }
+}
 
 app.post("/api/auth/register", async (req, res) => {
   const { name, email, password, role } = req.body;
@@ -152,6 +197,91 @@ app.post("/api/auth/login", async (req, res) => {
     token,
     user: { id: user.id, name: user.name, email: user.email, role: user.role }
   });
+});
+
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: "email is required" });
+  }
+
+  const normalizedEmail = String(email).toLowerCase();
+  const db = await readDb();
+  const user = db.users.find((u) => u.email === normalizedEmail);
+
+  if (!user) {
+    return res.json({ message: "If this email is registered, a reset link has been sent." });
+  }
+
+  const nowIso = new Date().toISOString();
+  db.passwordResets = db.passwordResets.map((entry) => (
+    entry.email === normalizedEmail && !entry.usedAt
+      ? { ...entry, usedAt: nowIso }
+      : entry
+  ));
+
+  const token = createResetToken();
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000).toISOString();
+  db.passwordResets.push({
+    id: uuid(),
+    email: normalizedEmail,
+    tokenHash: hashResetToken(token),
+    createdAt: nowIso,
+    expiresAt,
+    usedAt: null
+  });
+  await writeDb(db);
+
+  const resetLink = `${FRONTEND_URL.replace(/\/$/, "")}/reset-password?token=${token}`;
+  try {
+    await sendPasswordResetEmail({
+      email: normalizedEmail,
+      name: user.name,
+      resetLink
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Unable to send reset email right now. Try again later." });
+  }
+
+  return res.json({ message: "If this email is registered, a reset link has been sent." });
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) {
+    return res.status(400).json({ message: "token and newPassword are required" });
+  }
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({ message: "Password must be at least 6 characters" });
+  }
+
+  const db = await readDb();
+  const tokenHash = hashResetToken(String(token));
+  const resetEntry = db.passwordResets.find((entry) => entry.tokenHash === tokenHash);
+
+  if (!resetEntry || resetEntry.usedAt) {
+    return res.status(400).json({ message: "Invalid or already used reset token" });
+  }
+  if (Date.now() > new Date(resetEntry.expiresAt).getTime()) {
+    return res.status(400).json({ message: "Reset token has expired" });
+  }
+
+  const userIndex = db.users.findIndex((u) => u.email === resetEntry.email);
+  if (userIndex === -1) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  const nowIso = new Date().toISOString();
+  db.users[userIndex].passwordHash = await bcrypt.hash(String(newPassword), 10);
+  db.passwordResets = db.passwordResets.map((entry) => (
+    entry.email === resetEntry.email && !entry.usedAt
+      ? { ...entry, usedAt: nowIso }
+      : entry
+  ));
+  await writeDb(db);
+
+  return res.json({ message: "Password reset successful. Please login with your new password." });
 });
 
 app.get("/api/vegetables", async (_, res) => {

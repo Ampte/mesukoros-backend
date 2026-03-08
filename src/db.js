@@ -9,13 +9,20 @@ const dataPath = path.resolve(__dirname, "data", "db.json");
 const initialData = {
   users: [],
   vegetables: [],
-  orders: []
+  orders: [],
+  passwordResets: []
 };
 
 export async function readDb() {
   try {
     const raw = await fs.readFile(dataPath, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users : [],
+      vegetables: Array.isArray(parsed.vegetables) ? parsed.vegetables : [],
+      orders: Array.isArray(parsed.orders) ? parsed.orders : [],
+      passwordResets: Array.isArray(parsed.passwordResets) ? parsed.passwordResets : []
+    };
   } catch (error) {
     if (error.code === "ENOENT") {
       await writeDb(initialData);
