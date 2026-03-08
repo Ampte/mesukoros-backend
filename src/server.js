@@ -9,7 +9,7 @@ import { readDb, writeDb } from "./db.js";
 import { authenticate, authorizeRole, signBootstrapToken, signToken, verifyBootstrapToken } from "./auth.js";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 const NODE_ENV = process.env.NODE_ENV || "development";
 const ADMIN_GATE_PASSWORDS = new Set([
   "ilovemyparents",
@@ -18,7 +18,9 @@ const ADMIN_GATE_PASSWORDS = new Set([
 ]);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const frontendDistPath = path.resolve(__dirname, "..", "..", "frontend", "dist");
+const frontendDistPath = process.env.FRONTEND_DIST
+  ? path.resolve(process.env.FRONTEND_DIST)
+  : null;
 const clientOrigins = (process.env.CLIENT_URL || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -706,7 +708,7 @@ app.post("/api/orders/:orderId/cancel", authenticate, authorizeRole("customer"),
   return res.json({ message: "Order canceled" });
 });
 
-if (NODE_ENV === "production" && fs.existsSync(frontendDistPath)) {
+if (NODE_ENV === "production" && frontendDistPath && fs.existsSync(frontendDistPath)) {
   app.use(express.static(frontendDistPath));
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api/")) {
